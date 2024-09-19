@@ -90,7 +90,7 @@ X_train_tensor = torch.tensor(X_train)
 X_test_tensor = torch.tensor(X_test)
 
 # Train the model
-num_epochs = 50
+num_epochs = 150
 batch_size = 32
 num_samples = X_train_tensor.shape[0]
 
