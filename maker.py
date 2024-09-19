@@ -17,11 +17,11 @@ collection = database["OutstandingSummary"]
 def generate_random_document():
     client_id = str(uuid.uuid4())
     ledger_name = fake.company()
-    total_transactions = random.randint(1, 10)
+    total_transactions = random.randint(1, 2000)
     total_delayed = random.randint(0, total_transactions)
     delay_percentage = (total_delayed / total_transactions) * 100 if total_transactions > 0 else 0
     amount_due = random.randint(1000, 500000)
-    average_delay_days = random.randint(1, 180)
+    average_delay_days = random.randint(1, 360)
     last_action = random.choice(['Send Reminder', 'Check Payment Status', 'Contact Client'])
     last_outcome = random.choice(['Payment Pending', 'Payment Received', 'No Response'])
     action_history = []

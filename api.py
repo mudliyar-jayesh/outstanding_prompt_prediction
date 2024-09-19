@@ -11,24 +11,24 @@ from sklearn.exceptions import NotFittedError
 
 # Load the trained model
 class NeuralNet(nn.Module):
-    def __init__(self, input_size):
+    def __init__(self, input_size, num_classes):
         super(NeuralNet, self).__init__()
         self.fc1 = nn.Linear(input_size, 64)
         self.relu1 = nn.ReLU()
         self.fc2 = nn.Linear(64, 32)
         self.relu2 = nn.ReLU()
-        self.fc3 = nn.Linear(32, 1)
-        self.sigmoid = nn.Sigmoid()
-        
+        self.fc3 = nn.Linear(32, num_classes)
+        # No activation function here
+
     def forward(self, x):
         out = self.relu1(self.fc1(x))
         out = self.relu2(self.fc2(out))
-        out = self.sigmoid(self.fc3(out))
+        out = self.fc3(out)
         return out
 
 # Load encoders
 action_encoder = joblib.load('action_encoder.joblib')
-outcome_encoder = joblib.load('outcome_encoder.joblib')  # Only needed if you want to inverse transform predictions
+outcome_encoder = joblib.load('outcome_encoder.joblib')
 
 # Ensure the encoder is fitted
 try:
@@ -36,7 +36,6 @@ try:
     print("action_encoder is fitted.")
 except NotFittedError:
     print("action_encoder is not fitted.")
-    # Handle error appropriately or exit
     exit(1)
 
 # Load feature columns
@@ -45,7 +44,8 @@ with open('feature_columns.txt', 'r') as f:
 
 # Initialize the model
 input_size = len(feature_columns)
-model = NeuralNet(input_size)
+num_classes = len(outcome_encoder.classes_)
+model = NeuralNet(input_size, num_classes)
 model.load_state_dict(torch.load('payment_recommendation_model.pth'))
 model.eval()
 
@@ -72,23 +72,19 @@ def predict():
             delay_percentage = float(data['delay_percentage'])
             amount_due = float(data['amount_due'])
             average_delay_days = float(data['average_delay_days'])
-            last_action = data['last_action']
+            last_action = data['last_action'].strip().lower()
         except ValueError:
             return jsonify({'error': 'Invalid input data type'}), 400
+
+        # Preprocess 'last_action' using the loaded OneHotEncoder
+        input_df = pd.DataFrame({
+            'last_action': [last_action]
+        })
 
         # Check for unknown 'last_action' categories
         if last_action not in action_encoder.categories_[0]:
             return jsonify({'error': f"Unknown 'last_action' category: {last_action}"}), 400
 
-        # Create a DataFrame from the input data
-        input_df = pd.DataFrame({
-            'delay_percentage': [delay_percentage],
-            'amount_due': [amount_due],
-            'average_delay_days': [average_delay_days],
-            'last_action': [last_action]
-        })
-
-        # Preprocess 'last_action' using the loaded OneHotEncoder
         action_encoded = action_encoder.transform(input_df[['last_action']])
         action_encoded_df = pd.DataFrame(
             action_encoded, 
@@ -96,8 +92,14 @@ def predict():
         )
 
         # Combine numerical features with the one-hot encoded 'last_action'
+        numerical_features = pd.DataFrame({
+            'delay_percentage': [delay_percentage],
+            'amount_due': [amount_due],
+            'average_delay_days': [average_delay_days]
+        })
+
         input_processed = pd.concat(
-            [input_df[['delay_percentage', 'amount_due', 'average_delay_days']].reset_index(drop=True), action_encoded_df], 
+            [numerical_features.reset_index(drop=True), action_encoded_df.reset_index(drop=True)], 
             axis=1
         )
 
@@ -110,14 +112,23 @@ def predict():
         # Make prediction
         with torch.no_grad():
             output = model(input_tensor)
-            probability = output.item()
-            prediction = 1 if probability > 0.5 else 0
-            predicted_label = outcome_encoder.inverse_transform([prediction])[0]
+            probabilities = nn.functional.softmax(output, dim=1)
+            top_probs, top_idxs = torch.topk(probabilities, k=3, dim=1)
+            top_probs = top_probs.cpu().numpy()[0]
+            top_idxs = top_idxs.cpu().numpy()[0]
+            top_classes = outcome_encoder.inverse_transform(top_idxs)
 
-        # Return the prediction as JSON
+            # Prepare the response
+            predictions = []
+            for cls, prob in zip(top_classes, top_probs):
+                predictions.append({
+                    'class': cls,
+                    'probability': float(prob)
+                })
+
+        # Return the top 3 predictions as JSON
         response = {
-            'probability': probability,
-            'prediction': predicted_label
+            'predictions': predictions
         }
         return jsonify(response)
 
